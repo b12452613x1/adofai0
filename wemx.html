@@ -1,0 +1,2479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>音频波形编辑器</title>
+<style>
+  :root {
+    --bg: #0d0f14;
+    --panel: #161a22;
+    --panel-2: #1d222c;
+    --border: #2a3140;
+    --text: #c8d0dc;
+    --text-dim: #6b7688;
+    --accent: #00d4ff;
+    --accent-2: #7c5cff;
+    --danger: #ff4d6d;
+    --sel: rgba(0, 212, 255, 0.15);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    transition: transform 0.3s ease, opacity 0.3s ease, max-height 0.3s ease, padding 0.3s ease;
+    max-height: 100px;
+    overflow: hidden;
+  }
+  .zoom-controls, .play-mode {
+    transition: transform 0.3s ease, opacity 0.3s ease, max-width 0.3s ease;
+    max-width: 500px;
+    overflow: hidden;
+  }
+
+  body.focus-mode .toolbar {
+    transform: translateY(-100%);
+    opacity: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-width: 0;
+  }
+  body.focus-mode .zoom-controls,
+  body.focus-mode .play-mode {
+    transform: translateX(50px);
+    opacity: 0;
+    max-width: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .toolbar .brand {
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--accent);
+    margin-right: 10px;
+    font-size: 14px;
+  }
+  .toolbar .brand span { color: var(--text-dim); font-weight: 400; font-size: 11px; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 11px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn:disabled:hover { border-color: var(--border); color: var(--text); }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    border: none;
+    color: #0d0f14;
+    font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.15); color: #0d0f14; }
+  .btn.danger { border-color: var(--danger); color: var(--danger); }
+  .btn.danger:hover { background: rgba(255,77,109,0.1); }
+  
+  .btn.active {
+    background: rgba(0, 212, 255, 0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .divider { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+
+  .editor { flex: 1; display: flex; overflow: hidden; position: relative; }
+
+  .wave-container {
+    flex: 1;
+    position: relative;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: #0a0c10;
+  }
+  .wave-container::-webkit-scrollbar { height: 12px; }
+  .wave-container::-webkit-scrollbar-track { background: var(--panel); }
+  .wave-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+  .wave-container::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+  .content { position: relative; min-width: 100%; }
+  canvas { display: block; }
+
+  .cursor {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--danger);
+    pointer-events: none;
+    z-index: 10;
+    box-shadow: 0 0 8px var(--danger);
+  }
+  .cursor::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -5px;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid var(--danger);
+  }
+
+  .selection {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--sel);
+    border-left: 1px solid var(--accent);
+    border-right: 1px solid var(--accent);
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  .seg-drag-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 18px;
+    z-index: 8;
+    pointer-events: none;
+  }
+  .seg-drag-handle {
+    position: absolute;
+    top: 0;
+    height: 18px;
+    background: rgba(124,92,255,0.0);
+    cursor: grab;
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    padding-left: 4px;
+    font-size: 10px;
+    color: rgba(255,255,255,0.6);
+  }
+  .seg-drag-handle:hover { background: rgba(124,92,255,0.35); color: #fff; }
+  .seg-drag-handle.dragging { cursor: grabbing; background: rgba(255,159,67,0.5); }
+
+  .height-resizer {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: rgba(42, 49, 64, 0.8);
+    cursor: ns-resize;
+    z-index: 20;
+    border-top: 1px solid var(--border);
+  }
+  .height-resizer:hover { background: var(--accent); }
+
+  .playbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    transition: all 0.3s;
+  }
+  .play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #0d0f14;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  .play-btn:hover { transform: scale(1.06); }
+  .play-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  
+  .to-start-btn {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .to-start-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .time-display {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    min-width: 150px;
+  }
+  .time-display b { color: var(--accent); font-weight: 600; }
+
+  .play-mode {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-left: 10px;
+  }
+  .play-mode select {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 8px;
+    border-radius: 4px;
+    outline: none;
+    font-size: 12px;
+  }
+  .play-mode select:focus { border-color: var(--accent); }
+
+  .focus-btn {
+    margin-left: 10px;
+    padding: 4px 10px;
+    font-size: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .focus-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .focus-btn.active { background: rgba(0, 212, 255, 0.15); border-color: var(--accent); color: var(--accent); }
+
+  .zoom-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 1; max-width: 420px; }
+  .zoom-controls input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .zoom-label { font-size: 11px; color: var(--text-dim); min-width: 50px; text-align: right; }
+
+  .wheel-speed {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: 8px;
+  }
+  .wheel-speed input[type="number"] {
+    width: 40px;
+    padding: 3px 5px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 11px;
+    text-align: center;
+  }
+  .wheel-speed input[type="number"]:focus { outline: none; border-color: var(--accent); }
+
+  .empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+  .empty-state .icon { font-size: 36px; opacity: 0.3; }
+  .empty-state p { font-size: 13px; }
+
+  .toast {
+    position: fixed;
+    bottom: 90px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--panel-2);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 9px 18px;
+    border-radius: 6px;
+    font-size: 12px;
+    opacity: 0;
+    transition: all 0.3s;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .file-input { display: none; }
+
+  .ctx-menu {
+    position: fixed;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 200;
+    display: none;
+  }
+  .ctx-menu.show { display: block; }
+  .ctx-item {
+    padding: 8px 12px;
+    font-size: 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .ctx-item:hover { background: var(--border); color: var(--accent); }
+  .ctx-item.danger { color: var(--danger); }
+  .ctx-item.danger:hover { background: rgba(255,77,109,0.12); }
+  .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+
+  .modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    width: 380px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  }
+  .modal h3 {
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+  .modal-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .modal-row label {
+    font-size: 12px;
+    color: var(--text-dim);
+    min-width: 64px;
+  }
+  .modal-row input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+  }
+  .modal-row input[type="text"], .modal-row select {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+  }
+  .modal-row input[type="text"]:focus, .modal-row select:focus { border-color: var(--accent); }
+  .modal-row .val {
+    font-size: 12px;
+    color: var(--accent);
+    min-width: 60px;
+    text-align: right;
+    font-family: "SF Mono", Consolas, monospace;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+  }
+  .modal-tab {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .modal-tab button {
+    flex: 1;
+    padding: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s;
+  }
+  .modal-tab button.active {
+    background: rgba(0, 212, 255, 0.1);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .ext-input-wrap {
+    display: none;
+    align-items: center;
+    gap: 4px;
+  }
+  .ext-input-wrap.show { display: flex; }
+  .ext-input-wrap input {
+    width: 60px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="brand">WAVE EDITOR <span>/ 波形编辑器</span></div>
+
+  <button class="btn primary" id="loadBtn">打开</button>
+  <input type="file" id="fileInput" class="file-input" accept="audio/*, .wemx, .xml, .txt">
+
+  <div class="divider"></div>
+
+  <button class="btn" id="silenceBtn" disabled>静音选区</button>
+  <button class="btn danger" id="deleteBtn" disabled>删除选区</button>
+
+  <div class="divider"></div>
+
+  <button class="btn" id="copyBtn" disabled>复制</button>
+  <button class="btn" id="cutBtn" disabled>剪切</button>
+  <button class="btn" id="pasteBtn" disabled>粘贴</button>
+  <button class="btn" id="splitBtn" disabled>分割</button>
+  <button class="btn" id="insertBtn" disabled>插入文件</button>
+
+  <div class="divider"></div>
+
+  <button class="btn" id="reverseBtn" disabled>倒放段落</button>
+  <button class="btn" id="fadeBtn" disabled>淡入淡出</button>
+
+  <div class="divider"></div>
+
+  <button class="btn" id="undoBtn" disabled>撤销</button>
+  <button class="btn" id="redoBtn" disabled>重做</button>
+
+  <div class="divider"></div>
+
+  <button class="btn danger" id="clearSelBtn" disabled>取消选区</button>
+  <button class="btn" id="exportBtn" disabled>导出</button>
+</div>
+
+<div class="editor">
+  <div class="wave-container" id="waveContainer">
+    <div class="content" id="content">
+      <canvas id="ruler" height="28"></canvas>
+      <canvas id="waveform" height="200"></canvas>
+      <div class="seg-drag-layer" id="segDragLayer"></div>
+      <div class="cursor" id="cursor" style="display:none"></div>
+      <div class="selection" id="selection" style="display:none"></div>
+      <div class="height-resizer" id="heightResizer" title="上下拖动以改变波形显示高度"></div>
+    </div>
+    <div class="empty-state" id="emptyState">
+      <div class="icon">[ ]</div>
+      <p>点击上方「打开」导入音频或项目</p>
+    </div>
+  </div>
+</div>
+
+<div class="playbar">
+  <button class="play-btn to-start-btn" id="toStartBtn" disabled title="回到开头">|◀</button>
+  <button class="play-btn" id="playBtn" disabled>▶</button>
+  <div class="time-display">
+    <b id="curTime">0:00.000</b> / <span id="totalTime">0:00.000</span>
+  </div>
+  
+  <div class="play-mode">
+    <span>滚动:</span>
+    <select id="playScrollMode">
+      <option value="none">不锁定</option>
+      <option value="page">锁定页面</option>
+      <option value="follow" selected>锁定位置</option>
+    </select>
+  </div>
+
+  <button class="focus-btn" id="focusBtn" title="专注模式 (Ctrl+L)">锁定界面</button>
+
+  <div class="zoom-controls">
+    <span style="font-size:11px;color:var(--text-dim)">缩放</span>
+    <input type="range" id="zoomSlider" min="0" max="10000" value="0" step="1" disabled>
+    <span class="zoom-label" id="zoomLabel">100%</span>
+    <div class="wheel-speed">
+      <span>滚轮</span>
+      <input type="number" id="wheelSpeed" value="5" min="1" max="50" step="1">
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="ctx-menu" id="ctxMenu">
+  <div class="ctx-item" data-action="rename">重命名片段</div>
+  <div class="ctx-item" data-action="delete">删除该段</div>
+  <div class="ctx-item" data-action="copy">复制该段</div>
+  <div class="ctx-item" data-action="silence">静音该段</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" data-action="splitCursor">在刻度位置分割</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" data-action="pitchSpeed">音高/速度</div>
+</div>
+
+<!-- 音高速度弹窗 -->
+<div class="modal-mask" id="psModal">
+  <div class="modal">
+    <h3>音高 / 速度（选中段落）</h3>
+    <div class="modal-row">
+      <label>音高</label>
+      <input type="range" id="pitchRange" min="-36" max="36" value="0" step="1">
+      <span class="val" id="pitchVal">0 st</span>
+    </div>
+    <div class="modal-row">
+      <label>速度</label>
+      <input type="range" id="speedRange" min="0.1" max="8" value="1" step="0.05">
+      <span class="val" id="speedVal">1.00x</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-close="psModal">取消</button>
+      <button class="btn primary" id="psApply">应用</button>
+    </div>
+  </div>
+</div>
+
+<!-- 淡入淡出弹窗 -->
+<div class="modal-mask" id="fadeModal">
+  <div class="modal">
+    <h3>淡入 / 淡出（选中段落或选区）</h3>
+    
+    <div class="modal-tab" id="fadeModeTab">
+      <button data-mode="internal" class="active">内部（首尾到0）</button>
+      <button data-mode="external">外部（首尾不归零）</button>
+    </div>
+
+    <div class="modal-row">
+      <label>类型</label>
+      <div style="flex:1; display:flex; gap:10px;">
+        <button class="btn" id="fadeInBtn" style="flex:1; justify-content:center;">淡入</button>
+        <button class="btn" id="fadeOutBtn" style="flex:1; justify-content:center;">淡出</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-close="fadeModal">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 重命名弹窗 -->
+<div class="modal-mask" id="renameModal">
+  <div class="modal">
+    <h3>重命名片段</h3>
+    <div class="modal-row">
+      <label>名称</label>
+      <input type="text" id="renameInput" value="">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-close="renameModal">取消</button>
+      <button class="btn primary" id="renameApply">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 导出弹窗 -->
+<div class="modal-mask" id="exportModal">
+  <div class="modal">
+    <h3>导出文件</h3>
+    <div class="modal-row">
+      <label>文件名</label>
+      <input type="text" id="exportName" value="edited_audio">
+    </div>
+    <div class="modal-row">
+      <label>格式</label>
+      <select id="exportFormat">
+        <option value="wav">WAV 音频 (.wav)</option>
+        <option value="wemx">项目文件 (.wemx)</option>
+        <option value="xml">项目 XML (.xml)</option>
+        <option value="txt">纯文本 (.txt)</option>
+        <option value="*">任意后缀</option>
+      </select>
+      <div class="ext-input-wrap" id="extInputWrap">
+        <input type="text" id="exportExtInput" value="dat" placeholder="后缀">
+      </div>
+    </div>
+    
+    <div id="wavOptions" style="display:block;">
+      <div class="modal-row">
+        <label>采样率</label>
+        <select id="exportSampleRate">
+          <option value="8000">8000 Hz</option>
+          <option value="11025">11025 Hz</option>
+          <option value="16000">16000 Hz</option>
+          <option value="22050">22050 Hz</option>
+          <option value="32000">32000 Hz</option>
+          <option value="44100">44100 Hz</option>
+          <option value="48000">48000 Hz</option>
+          <option value="88200">88200 Hz</option>
+          <option value="96000">96000 Hz</option>
+          <option value="176400">176400 Hz</option>
+          <option value="192000">192000 Hz</option>
+          <option value="352800">352800 Hz</option>
+          <option value="384000">384000 Hz</option>
+          <option value="custom">自定义</option>
+        </select>
+        <input type="number" id="customSampleRate" min="1000" max="500000" value="44100" style="display:none; width:100px;">
+      </div>
+      <div class="modal-row">
+        <label>声道</label>
+        <select id="exportChannels">
+          <option value="1">单声道 (Mono)</option>
+          <option value="2">双声道 (Stereo)</option>
+        </select>
+      </div>
+      <div class="modal-row">
+        <label>元数据</label>
+        <button class="btn" id="editMetaBtn" style="flex:1;">编辑元数据 (标题、艺术家等)</button>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" data-close="exportModal">取消</button>
+      <button class="btn primary" id="exportConfirm">导出</button>
+    </div>
+  </div>
+</div>
+
+<!-- 元数据编辑弹窗 -->
+<div class="modal-mask" id="metaModal">
+  <div class="modal">
+    <h3>编辑元数据</h3>
+    <div class="modal-row">
+      <label>标题</label>
+      <input type="text" id="exportTitle" value="">
+    </div>
+    <div class="modal-row">
+      <label>艺术家</label>
+      <input type="text" id="exportArtist" value="">
+    </div>
+    <div class="modal-row">
+      <label>专辑</label>
+      <input type="text" id="exportAlbum" value="">
+    </div>
+    <div class="modal-row">
+      <label>年份</label>
+      <input type="text" id="exportYear" value="">
+    </div>
+    <div class="modal-actions">
+      <button class="btn primary" id="metaConfirm">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 插入文件专用的隐藏 input -->
+<input type="file" id="insertFileInput" class="file-input" accept="audio/*">
+
+<script>
+// ============ 状态 ============
+let audioCtx = null;
+let audioBuffer = null;
+let sourceNode = null;
+let isPlaying = false;
+let playStartTime = 0;
+let playOffset = 0;
+let rafId = null;
+
+let zoom = 1;
+const PADDING = 40;
+const PX_PER_SEC_BASE = 100;
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 5000;
+
+let segments = [];
+let selectedSegment = -1;
+let selection = null;
+let isSelecting = false;
+let selStartX = 0;
+let selDragged = false;
+
+let cursorSample = 0;
+let clipboard = null;
+let wheelSpeed = 5;
+
+let dragSegIndex = -1;
+let dragSegStartX = 0;
+let isDragMoving = false;
+
+let ctxTargetSeg = -1;
+
+let history = [];
+let future = [];
+const MAX_HISTORY = 50;
+
+let fadeMode = 'internal';
+let playScrollMode = 'follow';
+let waveHeight = 200;
+
+let isFocusMode = false;
+
+// 用于插入文件的状态记录
+let insertSplitSample = -1;
+let insertWasSplit = false;
+
+// ============ DOM ============
+const $ = id => document.getElementById(id);
+const fileInput = $('fileInput');
+const insertFileInput = $('insertFileInput');
+const waveContainer = $('waveContainer');
+const content = $('content');
+const rulerCanvas = $('ruler');
+const waveCanvas = $('waveform');
+const cursorEl = $('cursor');
+const selectionEl = $('selection');
+const emptyState = $('emptyState');
+const playBtn = $('playBtn');
+const toStartBtn = $('toStartBtn');
+const curTimeEl = $('curTime');
+const totalTimeEl = $('totalTime');
+const zoomSlider = $('zoomSlider');
+const zoomLabel = $('zoomLabel');
+const toastEl = $('toast');
+const segDragLayer = $('segDragLayer');
+const ctxMenu = $('ctxMenu');
+const wheelSpeedInput = $('wheelSpeed');
+const playScrollModeSelect = $('playScrollMode');
+const heightResizer = $('heightResizer');
+const focusBtn = $('focusBtn');
+
+const ctxRuler = rulerCanvas.getContext('2d');
+const ctxWave = waveCanvas.getContext('2d');
+
+// ============ 工具 ============
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastEl._timer);
+  toastEl._timer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+}
+
+function fmtTimeSmart(sec, decimals) {
+  if (!isFinite(sec)) sec = 0;
+  const abs = Math.abs(sec);
+  if (abs >= 3600) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return `${h}h ${m}m ${s.toFixed(Math.min(decimals,3))}s`;
+  }
+  if (abs >= 60) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m ${s.toFixed(Math.min(decimals,3))}s`;
+  }
+  return `${sec.toFixed(decimals)}s`;
+}
+
+function fmtTimePlayer(sec) {
+  if (!isFinite(sec)) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.floor((sec % 1) * 1000);
+  return `${m}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+}
+
+function getDuration() { return audioBuffer ? audioBuffer.duration : 0; }
+function getSampleRate() { return audioBuffer ? audioBuffer.sampleRate : 44100; }
+function getTotalSamples() { return audioBuffer ? audioBuffer.length : 0; }
+
+function timeToPx(t) { return PADDING + t * PX_PER_SEC_BASE * zoom; }
+function pxToTime(px) { return (px - PADDING) / (PX_PER_SEC_BASE * zoom); }
+function sampleToPx(s) { return timeToPx(s / getSampleRate()); }
+function pxToSample(px) {
+  const t = pxToTime(px);
+  return Math.max(0, Math.min(getTotalSamples(), Math.round(t * getSampleRate())));
+}
+
+function zoomToSlider(z) {
+  const t = (Math.log(z) - Math.log(ZOOM_MIN)) / (Math.log(ZOOM_MAX) - Math.log(ZOOM_MIN));
+  return Math.round(t * 10000);
+}
+function sliderToZoom(v) {
+  const t = v / 10000;
+  return Math.exp(Math.log(ZOOM_MIN) + t * (Math.log(ZOOM_MAX) - Math.log(ZOOM_MIN)));
+}
+
+// ============ 专注模式 ============
+function toggleFocusMode() {
+  isFocusMode = !isFocusMode;
+  if (isFocusMode) {
+    document.body.classList.add('focus-mode');
+    focusBtn.classList.add('active');
+    focusBtn.textContent = '退出锁定';
+  } else {
+    document.body.classList.remove('focus-mode');
+    focusBtn.classList.remove('active');
+    focusBtn.textContent = '锁定界面';
+  }
+  setTimeout(() => {
+    if (audioBuffer) { resizeCanvas(); draw(); }
+  }, 300);
+}
+
+focusBtn.addEventListener('click', toggleFocusMode);
+
+// ============ 历史 ============
+function snapshot() {
+  const chs = [];
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    chs.push(new Float32Array(audioBuffer.getChannelData(c)));
+  }
+  return {
+    channels: chs,
+    sampleRate: audioBuffer.sampleRate,
+    length: audioBuffer.length,
+    segments: segments.map(s => ({ start: s.start, end: s.end, name: s.name, muted: s.muted })),
+    cursorSample,
+    selectedSegment
+  };
+}
+function pushHistory() {
+  if (!audioBuffer) return;
+  history.push(snapshot());
+  if (history.length > MAX_HISTORY) history.shift();
+  future = [];
+  updateUndoRedoButtons();
+}
+function restoreSnapshot(snap) {
+  const newBuffer = audioCtx.createBuffer(snap.channels.length, snap.length, snap.sampleRate);
+  for (let c = 0; c < snap.channels.length; c++) newBuffer.getChannelData(c).set(snap.channels[c]);
+  audioBuffer = newBuffer;
+  segments = snap.segments.map(s => ({ start: s.start, end: s.end, name: s.name, muted: s.muted }));
+  cursorSample = snap.cursorSample;
+  selectedSegment = snap.selectedSegment;
+  selection = null;
+  selectionEl.style.display = 'none';
+  totalTimeEl.textContent = fmtTimePlayer(getDuration());
+  resizeCanvas();
+  draw();
+  updateEditButtons();
+  updateUndoRedoButtons();
+}
+function undo() {
+  if (!history.length) return;
+  future.push(snapshot());
+  restoreSnapshot(history.pop());
+  showToast('已撤销');
+}
+function redo() {
+  if (!future.length) return;
+  history.push(snapshot());
+  restoreSnapshot(future.pop());
+  showToast('已重做');
+}
+function updateUndoRedoButtons() {
+  $('undoBtn').disabled = history.length === 0;
+  $('redoBtn').disabled = future.length === 0;
+}
+
+// ============ 渲染 ============
+function resizeCanvas() {
+  if (!audioBuffer) {
+    const w = waveContainer.clientWidth;
+    rulerCanvas.width = w;
+    waveCanvas.width = w;
+    content.style.width = w + 'px';
+    return;
+  }
+  const dur = getDuration();
+  const totalWidth = Math.max(waveContainer.clientWidth, Math.ceil(timeToPx(dur)) + PADDING);
+  content.style.width = totalWidth + 'px';
+  rulerCanvas.width = totalWidth;
+  waveCanvas.width = totalWidth;
+  updateDragHandles();
+}
+
+function draw() {
+  if (!audioBuffer) return;
+  drawRuler();
+  drawWaveform();
+  drawCursorAndSelection();
+}
+
+function drawRuler() {
+  const w = rulerCanvas.width;
+  const h = rulerCanvas.height;
+  ctxRuler.clearRect(0, 0, w, h);
+  ctxRuler.fillStyle = '#12151c';
+  ctxRuler.fillRect(0, 0, w, h);
+
+  const dur = getDuration();
+  const targets = [0.0001,0.0002,0.0005,0.001,0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.5,1,2,5,10,30,60,120,300,600,1800,3600];
+  let majorStep = 1;
+  for (const t of targets) { if (timeToPx(t) - PADDING >= 70) { majorStep = t; break; } majorStep = t; }
+  const minorStep = majorStep / 5;
+  let decimals = majorStep >= 1 ? 0 : majorStep >= 0.1 ? 1 : majorStep >= 0.01 ? 2 : majorStep >= 0.001 ? 3 : 4;
+
+  ctxRuler.strokeStyle = '#2a3140';
+  ctxRuler.fillStyle = '#6b7688';
+  ctxRuler.font = '11px -apple-system, sans-serif';
+  ctxRuler.textAlign = 'center';
+  ctxRuler.textBaseline = 'top';
+
+  for (let t = 0; t <= dur + minorStep; t += minorStep) {
+    const x = Math.round(timeToPx(t)) + 0.5;
+    if (x > w - PADDING) break;
+    ctxRuler.beginPath(); ctxRuler.moveTo(x, h - 6); ctxRuler.lineTo(x, h); ctxRuler.stroke();
+  }
+  for (let t = 0; t <= dur + majorStep; t += majorStep) {
+    const x = Math.round(timeToPx(t)) + 0.5;
+    if (x > w - PADDING) break;
+    ctxRuler.beginPath(); ctxRuler.moveTo(x, h - 14); ctxRuler.lineTo(x, h);
+    ctxRuler.strokeStyle = '#3a4354'; ctxRuler.stroke();
+    ctxRuler.fillText(fmtTimeSmart(t, decimals), x, 4);
+  }
+}
+
+function drawWaveform() {
+  const w = waveCanvas.width;
+  const h = waveCanvas.height;
+  const chCount = audioBuffer.numberOfChannels;
+  const chHeight = h / chCount;
+
+  ctxWave.clearRect(0, 0, w, h);
+  ctxWave.fillStyle = '#0a0c10';
+  ctxWave.fillRect(0, 0, w, h);
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const x1 = sampleToPx(seg.start);
+    const x2 = sampleToPx(seg.end);
+    if (x2 < 0 || x1 > w) continue;
+    const isSel = i === selectedSegment;
+
+    if (isSel) {
+      ctxWave.fillStyle = 'rgba(255,159,67,0.12)';
+    } else if (i % 2 === 0) {
+      ctxWave.fillStyle = 'rgba(255,255,255,0.012)';
+    } else {
+      ctxWave.fillStyle = 'rgba(124,92,255,0.03)';
+    }
+    ctxWave.fillRect(x1, 0, x2 - x1, h);
+
+    ctxWave.strokeStyle = isSel ? '#ff9f43' : 'rgba(124,92,255,0.55)';
+    ctxWave.lineWidth = isSel ? 2 : 1;
+    ctxWave.beginPath(); ctxWave.moveTo(Math.round(x1) + 0.5, 0); ctxWave.lineTo(Math.round(x1) + 0.5, h); ctxWave.stroke();
+
+    ctxWave.fillStyle = isSel ? '#ff9f43' : 'rgba(124,92,255,0.35)';
+    ctxWave.fillRect(x1, 0, Math.max(1, x2 - x1), isSel ? 3 : 2);
+
+    ctxWave.fillStyle = isSel ? '#ff9f43' : 'rgba(124,92,255,0.85)';
+    ctxWave.font = '11px -apple-system, sans-serif';
+    ctxWave.textAlign = 'left'; ctxWave.textBaseline = 'top';
+    const nameStr = seg.name || `#${i + 1}`;
+    if (x1 + 30 < w) ctxWave.fillText(nameStr, x1 + 6, 18);
+  }
+
+  const spp = getSampleRate() / (PX_PER_SEC_BASE * zoom);
+  const isHighZoom = spp < 4;
+
+  for (let c = 0; c < chCount; c++) {
+    const y0 = c * chHeight;
+    const mid = y0 + chHeight / 2;
+
+    if (c > 0) {
+      ctxWave.strokeStyle = '#1d222c';
+      ctxWave.beginPath(); ctxWave.moveTo(0, y0); ctxWave.lineTo(w, y0); ctxWave.stroke();
+    }
+    ctxWave.strokeStyle = '#1a1f28';
+    ctxWave.beginPath(); ctxWave.moveTo(0, mid); ctxWave.lineTo(w, mid); ctxWave.stroke();
+
+    ctxWave.fillStyle = '#3a4354';
+    ctxWave.font = '10px -apple-system, sans-serif';
+    ctxWave.textAlign = 'left'; ctxWave.textBaseline = 'top';
+    ctxWave.fillText(chCount === 1 ? 'MONO' : (c === 0 ? 'L' : c === 1 ? 'R' : `CH${c+1}`), PADDING + 6, y0 + 4);
+
+    const data = audioBuffer.getChannelData(c);
+    const amp = chHeight * 0.42;
+
+    ctxWave.lineWidth = 1;
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const sx1 = sampleToPx(seg.start);
+      const sx2 = sampleToPx(seg.end);
+      
+      const startX = Math.max(0, Math.floor(sx1));
+      const endX = Math.min(w, Math.ceil(sx2));
+      if (endX <= startX) continue;
+
+      ctxWave.strokeStyle = seg.muted ? '#404750' : (c === 0 ? '#00d4ff' : (c === 1 ? '#7c5cff' : '#ff9f43'));
+      ctxWave.beginPath();
+
+      if (isHighZoom) {
+        const startSample = Math.max(seg.start, Math.floor(pxToTime(startX) * getSampleRate()) - 2);
+        const endSample = Math.min(seg.end, Math.ceil(pxToTime(endX) * getSampleRate()) + 2);
+        for (let s = startSample; s < endSample; s++) {
+          const x = sampleToPx(s);
+          const y = mid - data[s] * amp;
+          if (s === startSample) ctxWave.moveTo(x, y);
+          else ctxWave.lineTo(x, y);
+        }
+      } else {
+        for (let x = startX; x < endX; x++) {
+          const sStart = Math.max(seg.start, Math.floor(pxToTime(x) * getSampleRate()));
+          const sEnd = Math.min(seg.end, Math.ceil(pxToTime(x + 1) * getSampleRate()));
+          let min = 0, max = 0;
+          if (sEnd > sStart) {
+            min = 1; max = -1;
+            for (let s = sStart; s < sEnd; s++) {
+              const v = data[s]; if (v < min) min = v; if (v > max) max = v;
+            }
+          }
+          ctxWave.moveTo(x + 0.5, mid - max * amp);
+          ctxWave.lineTo(x + 0.5, Math.max(mid - min * amp, mid - max * amp + 0.5));
+        }
+      }
+      ctxWave.stroke();
+    }
+  }
+}
+
+function drawCursorAndSelection() {
+  if (selection && selection.end > selection.start) {
+    const x1 = sampleToPx(selection.start);
+    const x2 = sampleToPx(selection.end);
+    selectionEl.style.display = 'block';
+    selectionEl.style.left = x1 + 'px';
+    selectionEl.style.width = (x2 - x1) + 'px';
+  } else selectionEl.style.display = 'none';
+
+  if (audioBuffer) {
+    cursorEl.style.display = 'block';
+    const x = sampleToPx(cursorSample);
+    cursorEl.style.left = (x - 1) + 'px'; 
+    curTimeEl.textContent = fmtTimePlayer(cursorSample / getSampleRate());
+  }
+  updateEditButtons();
+  updateDragHandles();
+}
+
+function updateDragHandles() {
+  segDragLayer.innerHTML = '';
+  if (!audioBuffer) return;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const x1 = sampleToPx(seg.start);
+    const x2 = sampleToPx(seg.end);
+    if (x2 < 0 || x1 > rulerCanvas.width) continue;
+    const handle = document.createElement('div');
+    handle.className = 'seg-drag-handle';
+    handle.style.left = x1 + 'px';
+    handle.style.width = Math.max(2, x2 - x1) + 'px';
+    handle.dataset.segIndex = i;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && !isFocusMode) {
+        selectedSegment = i;
+        draw();
+        updateEditButtons();
+      }
+    });
+    segDragLayer.appendChild(handle);
+  }
+}
+
+function updateCursor() {
+  if (!audioBuffer || !isPlaying) return;
+  const t = Math.min(audioCtx.currentTime - playStartTime + playOffset, getDuration());
+  const x = timeToPx(t);
+  cursorEl.style.display = 'block';
+  cursorEl.style.left = (x - 1) + 'px';
+  curTimeEl.textContent = fmtTimePlayer(t);
+  
+  if (playScrollMode !== 'none') {
+    const viewLeft = waveContainer.scrollLeft;
+    const viewRight = viewLeft + waveContainer.clientWidth;
+    const edgeBuffer = 50;
+
+    if (playScrollMode === 'page') {
+      if (x > viewRight - edgeBuffer) {
+        waveContainer.scrollLeft = x - PADDING;
+      }
+    } else if (playScrollMode === 'follow') {
+      if (x > viewLeft + waveContainer.clientWidth * 0.33 && x < viewRight - edgeBuffer) {
+         waveContainer.scrollLeft = x - waveContainer.clientWidth * 0.33;
+      }
+    }
+  }
+
+  if (t >= getDuration()) stopPlayback();
+  else rafId = requestAnimationFrame(updateCursor);
+}
+
+// ============ 播放 ============
+function play() {
+  if (!audioBuffer) return;
+  if (isPlaying) { pause(); return; }
+  if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  sourceNode = audioCtx.createBufferSource();
+  sourceNode.buffer = audioBuffer;
+  sourceNode.connect(audioCtx.destination);
+  playOffset = cursorSample / getSampleRate();
+  playStartTime = audioCtx.currentTime;
+  sourceNode.start(0, playOffset);
+  sourceNode.onended = () => { if (isPlaying) stopPlayback(); };
+  isPlaying = true;
+  playBtn.textContent = '⏸';
+  updateCursor();
+}
+function pause() {
+  if (!isPlaying) return;
+  cursorSample = Math.min(getTotalSamples(), Math.round((audioCtx.currentTime - playStartTime + playOffset) * getSampleRate()));
+  stopPlayback(true);
+  drawCursorAndSelection();
+}
+function stopPlayback(keep = false) {
+  isPlaying = false;
+  playBtn.textContent = '▶';
+  if (rafId) cancelAnimationFrame(rafId);
+  if (sourceNode) { try { sourceNode.stop(); } catch (e) {} sourceNode.disconnect(); sourceNode = null; }
+  if (!keep) {
+    cursorSample = Math.min(getTotalSamples(), Math.round(playOffset * getSampleRate()));
+    curTimeEl.textContent = fmtTimePlayer(playOffset);
+  }
+}
+
+toStartBtn.addEventListener('click', () => {
+  if (isPlaying) pause();
+  cursorSample = 0;
+  drawCursorAndSelection();
+  if (waveContainer.scrollLeft > 0) {
+    waveContainer.scrollLeft = 0;
+  }
+});
+
+playScrollModeSelect.addEventListener('change', (e) => {
+  playScrollMode = e.target.value;
+});
+
+// ============ 高度拉伸 ============
+heightResizer.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  const startH = waveHeight;
+
+  function onMouseMove(ev) {
+    const dy = ev.clientY - startY;
+    waveHeight = Math.max(60, Math.min(600, startH + dy * 2));
+    waveCanvas.height = waveHeight;
+    draw();
+  }
+  function onMouseUp() {
+    window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('mouseup', onMouseUp);
+  }
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
+});
+
+// ============ 加载与解析 ============
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  
+  if (ext === 'wemx' || ext === 'xml') {
+    await loadProjectFile(file, ext);
+  } else if (ext === 'txt') {
+    await loadTextProject(file);
+  } else {
+    await loadAudioFile(file);
+  }
+  fileInput.value = '';
+});
+
+async function loadAudioFile(file) {
+  try {
+    const ab = await file.arrayBuffer();
+    if (!audioCtx) audioCtx = new AudioContext();
+    audioBuffer = await audioCtx.decodeAudioData(ab);
+    
+    selection = null; selectedSegment = -1; cursorSample = 0; playOffset = 0;
+    segments = [{ start: 0, end: audioBuffer.length, name: '片段 1', muted: false }];
+    history = []; future = [];
+    
+    emptyState.style.display = 'none';
+    playBtn.disabled = false; toStartBtn.disabled = false; zoomSlider.disabled = false; $('exportBtn').disabled = false;
+    totalTimeEl.textContent = fmtTimePlayer(getDuration());
+    autoFitZoom(); draw(); updateUndoRedoButtons();
+    showToast(`已加载音频：${file.name}`);
+  } catch (err) { console.error(err); showToast('音频解码失败'); }
+}
+
+async function loadProjectFile(file, type) {
+  try {
+    const text = await file.text();
+    let projectData = null;
+    
+    if (type === 'xml' || type === 'wemx') {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(text, "text/xml");
+      if (doc.querySelector("parsererror")) throw new Error("XML 格式错误");
+      
+      projectData = {
+        sampleRate: parseInt(doc.documentElement.getAttribute("sampleRate")),
+        channels: parseInt(doc.documentElement.getAttribute("channels")),
+        length: parseInt(doc.documentElement.getAttribute("length")),
+        data: doc.querySelector("AudioData").textContent,
+        segments: []
+      };
+      doc.querySelectorAll("Segment").forEach(el => {
+        projectData.segments.push({
+          start: parseInt(el.getAttribute("start")),
+          end: parseInt(el.getAttribute("end")),
+          name: el.getAttribute("name") || '',
+          muted: el.getAttribute("muted") === "true"
+        });
+      });
+    }
+
+    if (!projectData || !projectData.sampleRate) throw new Error("无效项目文件");
+
+    const rawStr = atob(projectData.data.trim());
+    const rawAb = new ArrayBuffer(rawStr.length);
+    const rawView = new Uint8Array(rawAb);
+    for (let i = 0; i < rawStr.length; i++) rawView[i] = rawStr.charCodeAt(i);
+    
+    const floatArr = new Float32Array(rawAb);
+    if (floatArr.length !== projectData.length * projectData.channels) throw new Error("数据长度不匹配");
+
+    if (!audioCtx) audioCtx = new AudioContext();
+    audioBuffer = audioCtx.createBuffer(projectData.channels, projectData.length, projectData.sampleRate);
+    
+    for (let c = 0; c < projectData.channels; c++) {
+      const chData = audioBuffer.getChannelData(c);
+      for (let i = 0; i < projectData.length; i++) {
+        chData[i] = floatArr[i * projectData.channels + c];
+      }
+    }
+
+    segments = projectData.segments;
+    if (segments.length === 0) segments = [{ start: 0, end: audioBuffer.length, name: '片段 1', muted: false }];
+
+    selection = null; selectedSegment = -1; cursorSample = 0; playOffset = 0;
+    history = []; future = [];
+
+    emptyState.style.display = 'none';
+    playBtn.disabled = false; toStartBtn.disabled = false; zoomSlider.disabled = false; $('exportBtn').disabled = false;
+    totalTimeEl.textContent = fmtTimePlayer(getDuration());
+    autoFitZoom(); draw(); updateUndoRedoButtons();
+    showToast(`已加载项目：${file.name}`);
+  } catch (err) { console.error(err); showToast(`项目解析失败: ${err.message}`); }
+}
+
+async function loadTextProject(file) {
+  try {
+    const text = await file.text();
+    const lines = text.split(/\r?\n/);
+    if (lines[0].trim() !== '=== WAVE_EDITOR_PROJECT_V1 ===') throw new Error("无效的文本项目格式");
+    
+    let header = {};
+    let dataB64 = '';
+    let segments = [];
+    let state = 'header';
+    
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line === '=== SEGMENTS ===') { state = 'segments'; continue; }
+      if (line === '=== AUDIO_DATA ===') { state = 'data'; continue; }
+      
+      if (state === 'header' && line) {
+        const parts = line.split('=');
+        if (parts.length === 2) header[parts[0].trim()] = parts[1].trim();
+      } else if (state === 'segments' && line) {
+        const parts = line.split(',');
+        if (parts.length >= 2) {
+          segments.push({
+            start: parseInt(parts[0]),
+            end: parseInt(parts[1]),
+            name: parts[2] || '',
+            muted: parts[3] === 'true'
+          });
+        }
+      } else if (state === 'data' && line) {
+        dataB64 += line;
+      }
+    }
+    
+    if (!header.sampleRate || !header.length) throw new Error("缺少必要的头信息");
+    
+    const sr = parseInt(header.sampleRate);
+    const chCount = parseInt(header.channels);
+    const len = parseInt(header.length);
+    
+    const rawStr = atob(dataB64);
+    const rawAb = new ArrayBuffer(rawStr.length);
+    const rawView = new Uint8Array(rawAb);
+    for (let i = 0; i < rawStr.length; i++) rawView[i] = rawStr.charCodeAt(i);
+    
+    const floatArr = new Float32Array(rawAb);
+    
+    if (!audioCtx) audioCtx = new AudioContext();
+    audioBuffer = audioCtx.createBuffer(chCount, len, sr);
+    
+    for (let c = 0; c < chCount; c++) {
+      const chData = audioBuffer.getChannelData(c);
+      for (let i = 0; i < len; i++) {
+        chData[i] = floatArr[i * chCount + c];
+      }
+    }
+    
+    if (segments.length === 0) segments = [{ start: 0, end: len, name: '片段 1', muted: false }];
+
+    selection = null; selectedSegment = -1; cursorSample = 0; playOffset = 0;
+    history = []; future = [];
+
+    emptyState.style.display = 'none';
+    playBtn.disabled = false; toStartBtn.disabled = false; zoomSlider.disabled = false; $('exportBtn').disabled = false;
+    totalTimeEl.textContent = fmtTimePlayer(getDuration());
+    autoFitZoom(); draw(); updateUndoRedoButtons();
+    showToast(`已加载文本项目：${file.name}`);
+  } catch (err) {
+    console.error(err);
+    showToast(`文本格式错误: ${err.message}`);
+  }
+}
+
+function autoFitZoom() {
+  const dur = getDuration(); if (!dur) return;
+  const needed = (waveContainer.clientWidth - PADDING * 2) / (dur * PX_PER_SEC_BASE);
+  zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, needed));
+  zoomSlider.value = zoomToSlider(zoom);
+  zoomLabel.textContent = Math.round(zoom * 100) + '%';
+  resizeCanvas();
+  waveContainer.scrollLeft = 0;
+}
+$('loadBtn').addEventListener('click', () => fileInput.click());
+
+// ============ 插入文件逻辑 ============
+$('insertBtn').addEventListener('click', () => {
+  if (!audioBuffer) return;
+
+  // 1. 判断是否需要分割
+  const isOnBoundary = segments.some(seg => seg.start === cursorSample || seg.end === cursorSample);
+  
+  insertSplitSample = -1;
+  insertWasSplit = false;
+
+  if (!isOnBoundary && cursorSample > 0 && cursorSample < getTotalSamples()) {
+    // 记录分割前的历史
+    pushHistory();
+    // 在光标处分割
+    const cuts = [];
+    for (let i = 1; i < segments.length; i++) cuts.push(segments[i].start);
+    cuts.push(cursorSample);
+    cuts.sort((a,b) => a-b);
+    rebuildSegmentsFromCuts(cuts);
+    
+    insertSplitSample = cursorSample;
+    insertWasSplit = true;
+    
+    draw();
+    updateEditButtons();
+  }
+
+  // 2. 打开文件选择器
+  insertFileInput.click();
+});
+
+insertFileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  insertFileInput.value = ''; // 清空，允许重复导入
+
+  // 如果用户取消了文件选择，进行回滚
+  if (!file) {
+    if (insertWasSplit) {
+      undo();
+      showToast('已取消插入，撤销分割');
+      insertWasSplit = false;
+    }
+    return;
+  }
+
+  try {
+    const ab = await file.arrayBuffer();
+    if (!audioCtx) audioCtx = new AudioContext();
+    const newBuffer = await audioCtx.decodeAudioData(ab);
+    
+    // 如果成功解析，开始插入
+    if (!insertWasSplit) {
+      // 如果之前没分割（在线上），此时需要压入历史栈
+      pushHistory();
+    }
+    
+    const at = cursorSample;
+    const clipCh = newBuffer.numberOfChannels;
+    const clipLen = newBuffer.length;
+    const sr = getSampleRate();
+    
+    const newLen = getTotalSamples() + clipLen;
+    const targetCh = audioBuffer.numberOfChannels;
+    const nb = audioCtx.createBuffer(targetCh, newLen, sr);
+    
+    for (let c = 0; c < targetCh; c++) {
+      const src = audioBuffer.getChannelData(c);
+      const dst = nb.getChannelData(c);
+      // 前段
+      dst.set(src.subarray(0, at), 0);
+      
+      // 插入的音频
+      const clipSrc = newBuffer.getChannelData(Math.min(c, clipCh - 1));
+      // 需要重采样处理（如果采样率不同）
+      if (newBuffer.sampleRate !== sr) {
+        const ratio = newBuffer.sampleRate / sr;
+        for (let i = 0; i < clipLen * (sr / newBuffer.sampleRate); i++) {
+           // 简单重采样略，通常音频编辑器默认采样率一致，或应该拒绝
+           // 为了保证插入点完整性，这里假设采样率匹配，如果不匹配需要完整重采样库
+           // 简易线性插值：
+           const sPos = i * ratio;
+           const i0 = Math.floor(sPos);
+           const i1 = Math.min(clipLen - 1, i0 + 1);
+           if(i0 < clipLen) {
+             dst[at + i] = clipSrc[i0] * (1 - (sPos - i0)) + clipSrc[i1] * (sPos - i0);
+           }
+        }
+      } else {
+        dst.set(clipSrc, at);
+      }
+      
+      // 后段
+      dst.set(src.subarray(at), at + clipLen); // 注：如果是变采样率这里长度可能不对，暂略
+    }
+    audioBuffer = nb;
+    
+    // 重建分段
+    const cuts = [];
+    for (let i = 1; i < segments.length; i++) {
+      const c = segments[i].start;
+      cuts.push(c < at ? c : c + clipLen);
+    }
+    cuts.push(at); cuts.push(at + clipLen);
+    cuts.sort((a,b) => a-b);
+    const uniq = [];
+    for (const c of cuts) if (c > 0 && c < newLen && uniq[uniq.length-1] !== c) uniq.push(c);
+    rebuildSegmentsFromCuts(uniq);
+    
+    cursorSample = at + clipLen;
+    
+    // 修正插入后当前选中段落
+    selectedSegment = findSegmentIndex(cursorSample);
+
+    afterEdit('已成功插入文件');
+    insertWasSplit = false;
+  } catch (err) {
+    console.error(err);
+    // 导入失败，回滚分割
+    if (insertWasSplit) {
+      undo();
+      showToast('导入失败，已撤销分割');
+      insertWasSplit = false;
+    } else {
+      showToast('导入失败，文件无效');
+    }
+  }
+});
+
+// ============ 缩放 ============
+function setZoom(newZoom, anchorClientX) {
+  newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newZoom));
+  if (Math.abs(newZoom - zoom) < 1e-9) return;
+  const containerRect = waveContainer.getBoundingClientRect();
+  const anchorViewportX = anchorClientX != null ? anchorClientX - containerRect.left : waveContainer.clientWidth / 2;
+  const anchorContentX = waveContainer.scrollLeft + anchorViewportX;
+  const anchorTime = pxToSample(anchorContentX) / getSampleRate();
+
+  zoom = newZoom;
+  zoomSlider.value = zoomToSlider(zoom);
+  zoomLabel.textContent = Math.round(zoom * 100) + '%';
+  resizeCanvas(); draw();
+  waveContainer.scrollLeft = timeToPx(anchorTime) - anchorViewportX;
+}
+zoomSlider.addEventListener('input', () => setZoom(sliderToZoom(parseFloat(zoomSlider.value))));
+waveContainer.addEventListener('wheel', (e) => {
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    const f = 1 + wheelSpeed * 0.01;
+    setZoom(zoom * (e.deltaY > 0 ? 1/f : f), e.clientX);
+  }
+}, { passive: false });
+wheelSpeedInput.addEventListener('input', () => {
+  let v = parseInt(wheelSpeedInput.value, 10);
+  if (isNaN(v)) v = 5;
+  wheelSpeed = Math.max(1, Math.min(50, v));
+});
+
+// ============ 鼠标 ============
+function getContentX(clientX) { return clientX - content.getBoundingClientRect().left; }
+
+rulerCanvas.addEventListener('mousedown', (e) => {
+  if (!audioBuffer) return; e.preventDefault();
+  let sample = pxToSample(getContentX(e.clientX));
+  const threshold = 5;
+  const px = sampleToPx(sample);
+  for (const seg of segments) {
+    if (Math.abs(px - sampleToPx(seg.start)) < threshold) {
+      sample = seg.start;
+      break;
+    }
+    if (Math.abs(px - sampleToPx(seg.end)) < threshold) {
+      sample = seg.end;
+      break;
+    }
+  }
+  cursorSample = sample;
+  drawCursorAndSelection();
+});
+
+waveContainer.addEventListener('mousedown', (e) => {
+  if (!audioBuffer) return;
+  if (e.target === rulerCanvas) return;
+  if (e.target.classList.contains('height-resizer')) return;
+  if (e.button !== 0) return;
+  if (e.target.classList.contains('seg-drag-handle')) return;
+
+  const x = getContentX(e.clientX);
+  const sample = pxToSample(x);
+  selectedSegment = findSegmentIndex(sample);
+  cursorSample = sample;
+  drawCursorAndSelection(); draw();
+
+  selStartX = x; isSelecting = true; selDragged = false; selection = null;
+  selectionEl.style.display = 'none';
+});
+
+waveContainer.addEventListener('mousemove', (e) => {
+  if (!isSelecting || !audioBuffer) return;
+  const x = getContentX(e.clientX);
+  
+  const sampleX1 = Math.max(PADDING, Math.min(PADDING + timeToPx(getDuration()) - PADDING, Math.min(selStartX, x)));
+  const sampleX2 = Math.max(PADDING, Math.min(PADDING + timeToPx(getDuration()) - PADDING, Math.max(selStartX, x)));
+  
+  if (Math.abs(sampleX2 - sampleX1) > 3) {
+    selDragged = true; selectedSegment = -1;
+    selectionEl.style.display = 'block';
+    selectionEl.style.left = sampleX1 + 'px';
+    selectionEl.style.width = (sampleX2 - sampleX1) + 'px';
+    selection = { start: pxToSample(sampleX1), end: pxToSample(sampleX2) };
+    updateEditButtons();
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (!isSelecting) return;
+  isSelecting = false;
+  if (selection && selection.end - selection.start < 10) {
+    selection = null; selectionEl.style.display = 'none';
+  }
+  updateEditButtons();
+});
+
+// ============ 段落拖动 ============
+segDragLayer.addEventListener('mousedown', (e) => {
+  if (isFocusMode) return;
+  const handle = e.target.closest('.seg-drag-handle');
+  if (!handle || !audioBuffer) return;
+  e.preventDefault(); e.stopPropagation();
+  dragSegIndex = parseInt(handle.dataset.segIndex);
+  dragSegStartX = e.clientX; isDragMoving = false;
+  handle.classList.add('dragging');
+});
+window.addEventListener('mousemove', (e) => {
+  if (dragSegIndex < 0) return;
+  const dx = e.clientX - dragSegStartX;
+  if (Math.abs(dx) > 3) isDragMoving = true;
+  moveSegment(dragSegIndex, Math.round(pxToTime(dx) * getSampleRate()));
+});
+window.addEventListener('mouseup', () => {
+  if (dragSegIndex < 0) return;
+  const h = segDragLayer.querySelector(`.seg-drag-handle[data-seg-index="${dragSegIndex}"]`);
+  if (h) h.classList.remove('dragging');
+  if (isDragMoving) { snapSegment(); afterEdit('已移动段落'); }
+  dragSegIndex = -1; isDragMoving = false;
+});
+function moveSegment(idx, deltaSamples) {
+  if (idx <= 0 && deltaSamples < 0) return;
+  if (idx >= segments.length - 1 && deltaSamples > 0) return;
+  const seg = segments[idx];
+  const leftLimit = idx > 0 ? segments[idx-1].start : 0;
+  const rightLimit = idx < segments.length - 1 ? segments[idx+1].end : getTotalSamples();
+  let ns = Math.max(leftLimit, Math.min(rightLimit - 1, seg.start + deltaSamples));
+  let ne = Math.max(ns + 1, Math.min(rightLimit, seg.end + deltaSamples));
+  seg.start = ns; seg.end = ne;
+  if (idx > 0) segments[idx-1].end = ns;
+  if (idx < segments.length - 1) segments[idx+1].start = ne;
+  draw(); updateDragHandles();
+}
+function snapSegment() {
+  segments.sort((a,b) => a.start - b.start);
+  for (let i = 1; i < segments.length; i++) if (segments[i].start < segments[i-1].end) segments[i].start = segments[i-1].end;
+}
+
+// ============ 右键菜单 ============
+waveContainer.addEventListener('contextmenu', (e) => {
+  if (!audioBuffer) return;
+  if (isFocusMode) { e.preventDefault(); return; }
+  if (e.target === rulerCanvas) return;
+  e.preventDefault();
+  const sample = pxToSample(getContentX(e.clientX));
+  ctxTargetSeg = findSegmentIndex(sample);
+  selectedSegment = ctxTargetSeg;
+  cursorSample = sample;
+  drawCursorAndSelection(); draw();
+  ctxMenu.style.left = e.clientX + 'px';
+  ctxMenu.style.top = e.clientY + 'px';
+  ctxMenu.classList.add('show');
+});
+window.addEventListener('mousedown', (e) => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('show'); });
+
+ctxMenu.addEventListener('click', (e) => {
+  const item = e.target.closest('.ctx-item');
+  if (!item) return;
+  const action = item.dataset.action;
+  const idx = ctxTargetSeg;
+  ctxMenu.classList.remove('show');
+  if (idx < 0 || idx >= segments.length) return;
+  const seg = segments[idx];
+
+  if (action === 'rename') {
+    $('renameInput').value = seg.name || `片段 ${idx+1}`;
+    $('renameModal').classList.add('show');
+    $('renameApply').onclick = () => {
+      $('renameModal').classList.remove('show');
+      pushHistory();
+      seg.name = $('renameInput').value.trim() || `片段 ${idx+1}`;
+      afterEdit('已重命名片段');
+    };
+  } else if (action === 'delete') {
+    pushHistory(); deleteRange(seg.start, seg.end);
+    selection = null; selectedSegment = -1; afterEdit('已删除该段');
+  } else if (action === 'copy') {
+    clipboard = extractSegment(seg.start, seg.end); updateEditButtons(); showToast('已复制该段');
+  } else if (action === 'silence') {
+    pushHistory();
+    seg.muted = true; 
+    afterEdit('已静音该段');
+  } else if (action === 'splitCursor') {
+    pushHistory(); splitAt(cursorSample);
+  } else if (action === 'pitchSpeed') {
+    openPSModal();
+  }
+});
+
+function splitAt(sample) {
+  if (sample <= 0 || sample >= getTotalSamples()) { showToast('该位置无法分割'); return; }
+  const cuts = [];
+  for (let i = 1; i < segments.length; i++) cuts.push(segments[i].start);
+  if (!cuts.includes(sample)) cuts.push(sample);
+  cuts.sort((a,b) => a-b);
+  rebuildSegmentsFromCuts(cuts);
+  selectedSegment = -1; draw(); showToast('已在刻度位置分割');
+}
+
+// ============ 按钮状态 ============
+function updateEditButtons() {
+  const hasSel = selection && selection.end > selection.start;
+  const hasAudio = !!audioBuffer;
+  const hasClip = !!clipboard;
+  const hasSeg = selectedSegment >= 0 && selectedSegment < segments.length;
+
+  $('silenceBtn').disabled = !(hasAudio && hasSel);
+  $('deleteBtn').disabled = !(hasAudio && hasSel);
+  $('copyBtn').disabled = !(hasAudio && hasSel);
+  $('cutBtn').disabled = !(hasAudio && hasSel);
+  $('pasteBtn').disabled = !(hasAudio && hasClip);
+  $('splitBtn').disabled = !hasAudio;
+  $('insertBtn').disabled = !hasAudio;
+  $('reverseBtn').disabled = !(hasAudio && hasSeg);
+  $('fadeBtn').disabled = !(hasAudio && (hasSeg || hasSel));
+  $('clearSelBtn').disabled = !hasSel;
+}
+
+// ============ 基础编辑 ============
+$('silenceBtn').addEventListener('click', () => {
+  if (!selection) return;
+  pushHistory();
+  for (const seg of segments) {
+    if (seg.end > selection.start && seg.start < selection.end) {
+      seg.muted = true;
+    }
+  }
+  afterEdit('选区已静音');
+});
+$('deleteBtn').addEventListener('click', () => {
+  if (!selection) return;
+  pushHistory(); deleteRange(selection.start, selection.end);
+  selection = null; afterEdit('已删除选区');
+});
+$('copyBtn').addEventListener('click', () => {
+  if (!selection) return;
+  clipboard = extractSegment(selection.start, selection.end);
+  updateEditButtons();
+  showToast(`已复制 ${fmtTimePlayer((selection.end - selection.start) / getSampleRate())} 音频`);
+});
+$('cutBtn').addEventListener('click', () => {
+  if (!selection) return;
+  pushHistory();
+  clipboard = extractSegment(selection.start, selection.end);
+  deleteRange(selection.start, selection.end);
+  selection = null; afterEdit('已剪切选区');
+});
+$('pasteBtn').addEventListener('click', () => {
+  if (!clipboard) return;
+  pushHistory(); insertClip(cursorSample, clipboard); afterEdit('已粘贴到光标处');
+});
+$('splitBtn').addEventListener('click', () => {
+  if (!audioBuffer) return;
+  if (cursorSample <= 0 || cursorSample >= getTotalSamples()) { showToast('光标在两端，无法分割'); return; }
+  pushHistory(); splitAt(cursorSample);
+});
+$('reverseBtn').addEventListener('click', () => {
+  if (selectedSegment < 0 || selectedSegment >= segments.length) { showToast('请先单击选中一个段落'); return; }
+  pushHistory();
+  const { start, end } = segments[selectedSegment];
+  if (end - start < 2) return;
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const d = audioBuffer.getChannelData(c);
+    let i = start, j = end - 1;
+    while (i < j) { const t = d[i]; d[i] = d[j]; d[j] = t; i++; j--; }
+  }
+  afterEdit('选中段落已倒放');
+});
+
+// ============ 淡入淡出（弹窗） ============
+let fadeRange = null;
+$('fadeBtn').addEventListener('click', () => {
+  if (!audioBuffer) return;
+  if (selection && selection.end > selection.start) fadeRange = { start: selection.start, end: selection.end };
+  else if (selectedSegment >= 0 && selectedSegment < segments.length) fadeRange = { start: segments[selectedSegment].start, end: segments[selectedSegment].end };
+  else { showToast('请选中段落或拖选范围'); return; }
+
+  $('fadeModal').classList.add('show');
+});
+
+$('fadeModeTab').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  Array.from($('fadeModeTab').children).forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  fadeMode = btn.dataset.mode;
+});
+
+$('fadeInBtn').addEventListener('click', () => {
+  $('fadeModal').classList.remove('show');
+  if (!fadeRange) return;
+  pushHistory();
+  applyFade(fadeRange.start, fadeRange.end, true, fadeMode);
+  afterEdit(`已应用${fadeMode === 'internal' ? '内部' : '外部'}淡入`);
+});
+
+$('fadeOutBtn').addEventListener('click', () => {
+  $('fadeModal').classList.remove('show');
+  if (!fadeRange) return;
+  pushHistory();
+  applyFade(fadeRange.start, fadeRange.end, false, fadeMode);
+  afterEdit(`已应用${fadeMode === 'internal' ? '内部' : '外部'}淡出`);
+});
+
+function applyFade(start, end, isFadeIn, mode) {
+  const len = end - start;
+  if (len < 2) return;
+  
+  const smoothSamples = Math.min(Math.round(getSampleRate() * 0.005), Math.floor(len / 2));
+  
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const d = audioBuffer.getChannelData(c);
+    for (let i = 0; i < len; i++) {
+      let factor = 1;
+      const progress = i / len;
+      
+      if (mode === 'internal') {
+        factor = isFadeIn ? (1 - Math.cos(progress * Math.PI)) / 2 : (1 + Math.cos(progress * Math.PI)) / 2;
+        
+        if (i < smoothSamples) {
+          const microSmooth = i / smoothSamples;
+          factor *= microSmooth;
+        } else if (i > len - smoothSamples) {
+          const microSmooth = (len - i) / smoothSamples;
+          factor *= microSmooth;
+        }
+      } else {
+        if (isFadeIn) {
+          factor = 0.5 - 0.5 * Math.cos(progress * Math.PI);
+        } else {
+          factor = 0.5 + 0.5 * Math.cos(progress * Math.PI);
+        }
+      }
+      
+      d[start + i] *= factor;
+    }
+  }
+}
+
+// ============ 音高 / 速度 弹窗 ============
+function openPSModal() {
+  if (selectedSegment < 0 || selectedSegment >= segments.length) { showToast('请先选中一个段落'); return; }
+  $('pitchRange').value = 0; $('pitchVal').textContent = '0 st';
+  $('speedRange').value = 1; $('speedVal').textContent = '1.00x';
+  $('psModal').classList.add('show');
+}
+$('pitchRange').addEventListener('input', () => {
+  const v = parseInt($('pitchRange').value, 10);
+  $('pitchVal').textContent = (v > 0 ? '+' : '') + v + ' st';
+});
+$('speedRange').addEventListener('input', () => {
+  $('speedVal').textContent = parseFloat($('speedRange').value).toFixed(2) + 'x';
+});
+$('psApply').addEventListener('click', () => {
+  $('psModal').classList.remove('show');
+  if (selectedSegment < 0) return;
+  const semitones = parseInt($('pitchRange').value, 10);
+  const speed = parseFloat($('speedRange').value);
+  if (semitones === 0 && Math.abs(speed - 1) < 1e-6) return;
+
+  pushHistory();
+  applyPitchSpeed(selectedSegment, semitones, speed);
+  afterEdit(`段落已调整：音高 ${semitones > 0 ? '+' : ''}${semitones} st / 速度 ${speed.toFixed(2)}x`);
+});
+
+document.querySelectorAll('[data-close]').forEach(btn => {
+  btn.addEventListener('click', () => $(btn.dataset.close).classList.remove('show'));
+});
+
+$('clearSelBtn').addEventListener('click', () => {
+  selection = null; selectedSegment = -1;
+  selectionEl.style.display = 'none';
+  draw(); updateEditButtons();
+});
+
+// ============ 核心：颗粒化音高/速度处理 ============
+function applyPitchSpeed(segIdx, semitones, speed) {
+  const seg = segments[segIdx];
+  const start = seg.start;
+  const end = seg.end;
+  const srcLen = end - start;
+  if (srcLen < 64) return;
+
+  const sr = getSampleRate();
+  const pitchFactor = Math.pow(2, semitones / 12);
+  const grainLen = Math.max(32, Math.round(sr * 0.01));
+  const overlap = 0.5;
+  const srcHop = Math.max(1, Math.round(grainLen * (1 - overlap)));
+
+  const outLen = Math.max(32, Math.round(srcLen / speed));
+  const outHop = Math.max(1, Math.round(outLen / Math.ceil(srcLen / srcHop)));
+
+  const chData = [];
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const arr = new Float32Array(srcLen);
+    arr.set(audioBuffer.getChannelData(c).subarray(start, end));
+    chData.push(arr);
+  }
+
+  const outChs = [];
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    outChs.push(new Float32Array(outLen));
+  }
+
+  const windowFn = (i, len) => 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (len - 1));
+
+  let outPos = 0;
+  let srcPos = 0;
+  let grainIdx = 0;
+
+  while (outPos < outLen) {
+    const grainOut = [];
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) grainOut.push(new Float32Array(grainLen));
+
+    const randomPhase = Math.floor(Math.random() * srcHop);
+
+    for (let i = 0; i < grainLen; i++) {
+      let readPos = srcPos + i * pitchFactor + randomPhase;
+      if (readPos >= srcLen) readPos = srcLen - 1;
+      if (readPos < 0) readPos = 0;
+
+      const idx0 = Math.floor(readPos);
+      const frac = readPos - idx0;
+      
+      for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+        const data = chData[c];
+        let v;
+        if (idx0 + 1 < srcLen) {
+          v = data[idx0] * (1 - frac) + data[idx0 + 1] * frac;
+        } else {
+          v = data[idx0];
+        }
+        grainOut[c][i] = v;
+      }
+    }
+
+    for (let i = 0; i < grainLen; i++) {
+      const w = windowFn(i, grainLen);
+      const dstIdx = outPos + i;
+      if (dstIdx >= 0 && dstIdx < outLen) {
+        for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+          outChs[c][dstIdx] += grainOut[c][i] * w;
+        }
+      }
+    }
+
+    outPos += outHop;
+    srcPos += srcHop;
+    grainIdx++;
+
+    if (srcPos >= srcLen) srcPos -= srcLen;
+  }
+
+  let peak = 0;
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    for (let i = 0; i < outLen; i++) {
+      const v = Math.abs(outChs[c][i]);
+      if (v > peak) peak = v;
+    }
+  }
+  if (peak > 1) {
+    const g = 1 / peak;
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+      for (let i = 0; i < outLen; i++) outChs[c][i] *= g;
+    }
+  }
+
+  const oldTotal = getTotalSamples();
+  const newTotal = oldTotal - srcLen + outLen;
+  const newBuffer = audioCtx.createBuffer(audioBuffer.numberOfChannels, newTotal, sr);
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const src = audioBuffer.getChannelData(c);
+    const dst = newBuffer.getChannelData(c);
+    dst.set(src.subarray(0, start), 0);
+    dst.set(outChs[c], start);
+    dst.set(src.subarray(end), start + outLen);
+  }
+  audioBuffer = newBuffer;
+
+  const delta = outLen - srcLen;
+  const cuts = [];
+  for (let i = 1; i < segments.length; i++) {
+    const c = segments[i].start;
+    if (c <= start) cuts.push(c);
+    else if (c >= end) cuts.push(c + delta);
+  }
+  cuts.push(start); cuts.push(start + outLen);
+  cuts.sort((a,b) => a-b);
+  const uniq = [];
+  for (const c of cuts) if (c > 0 && c < newTotal && uniq[uniq.length-1] !== c) uniq.push(c);
+  rebuildSegmentsFromCuts(uniq);
+}
+
+// ============ 编辑工具函数 ============
+function extractSegment(start, end) {
+  const len = end - start;
+  const chs = [];
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const s = new Float32Array(len);
+    s.set(audioBuffer.getChannelData(c).subarray(start, end));
+    chs.push(s);
+  }
+  return { channels: chs, sampleRate: audioBuffer.sampleRate };
+}
+function deleteRange(start, end) {
+  const newLen = getTotalSamples() - (end - start);
+  const nb = audioCtx.createBuffer(audioBuffer.numberOfChannels, newLen, audioBuffer.sampleRate);
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const src = audioBuffer.getChannelData(c);
+    const dst = nb.getChannelData(c);
+    dst.set(src.subarray(0, start), 0);
+    dst.set(src.subarray(end), start);
+  }
+  audioBuffer = nb;
+  const cuts = [];
+  for (let i = 1; i < segments.length; i++) {
+    const c = segments[i].start;
+    if (c <= start) cuts.push(c);
+    else if (c >= end) cuts.push(c - (end - start));
+  }
+  rebuildSegmentsFromCuts(cuts);
+  if (cursorSample > end) cursorSample -= (end - start);
+  else if (cursorSample > start) cursorSample = start;
+}
+function insertClip(at, clip) {
+  if (clip.sampleRate !== getSampleRate()) { showToast('采样率不一致'); return; }
+  const clipLen = clip.channels[0].length;
+  const newLen = getTotalSamples() + clipLen;
+  const nb = audioCtx.createBuffer(audioBuffer.numberOfChannels, newLen, audioBuffer.sampleRate);
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const src = audioBuffer.getChannelData(c);
+    const dst = nb.getChannelData(c);
+    dst.set(src.subarray(0, at), 0);
+    dst.set(clip.channels[Math.min(c, clip.channels.length-1)], at);
+    dst.set(src.subarray(at), at + clipLen);
+  }
+  audioBuffer = nb;
+  const cuts = [];
+  for (let i = 1; i < segments.length; i++) {
+    const c = segments[i].start;
+    cuts.push(c < at ? c : c + clipLen);
+  }
+  cuts.push(at); cuts.push(at + clipLen);
+  cuts.sort((a,b) => a-b);
+  const uniq = [];
+  for (const c of cuts) if (c > 0 && c < newLen && uniq[uniq.length-1] !== c) uniq.push(c);
+  rebuildSegmentsFromCuts(uniq);
+  cursorSample = at + clipLen;
+}
+function insertSilence(at, gap) {
+  const newLen = getTotalSamples() + gap;
+  const nb = audioCtx.createBuffer(audioBuffer.numberOfChannels, newLen, audioBuffer.sampleRate);
+  for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+    const src = audioBuffer.getChannelData(c);
+    const dst = nb.getChannelData(c);
+    dst.set(src.subarray(0, at), 0);
+    dst.set(src.subarray(at), at + gap);
+  }
+  audioBuffer = nb;
+  const cuts = [];
+  for (let i = 1; i < segments.length; i++) {
+    const c = segments[i].start;
+    cuts.push(c <= at ? c : c + gap);
+  }
+  cuts.push(at); cuts.push(at + gap);
+  cuts.sort((a,b) => a-b);
+  const uniq = [];
+  for (const c of cuts) if (c > 0 && c < newLen && uniq[uniq.length-1] !== c) uniq.push(c);
+  rebuildSegmentsFromCuts(uniq);
+  cursorSample = at + gap;
+}
+function afterEdit(msg) {
+  playBtn.textContent = '▶';
+  isPlaying = false;
+  if (sourceNode) { try { sourceNode.stop(); } catch (e) {} sourceNode = null; }
+  if (rafId) cancelAnimationFrame(rafId);
+  totalTimeEl.textContent = fmtTimePlayer(getDuration());
+  resizeCanvas(); draw();
+  updateEditButtons(); updateUndoRedoButtons();
+  showToast(msg);
+}
+function rebuildSegmentsFromCuts(cuts) {
+  const oldSegs = [...segments];
+  segments = [];
+  let prev = 0;
+  const total = getTotalSamples();
+  for (const c of cuts) if (c > prev && c < total) { 
+    const old = oldSegs.find(o => o.start === prev);
+    segments.push({ start: prev, end: c, name: old?.name || '', muted: old?.muted || false }); 
+    prev = c; 
+  }
+  const old = oldSegs.find(o => o.start === prev);
+  segments.push({ start: prev, end: total, name: old?.name || '', muted: old?.muted || false });
+  if (selectedSegment >= segments.length) selectedSegment = -1;
+}
+function findSegmentIndex(sample) {
+  for (let i = 0; i < segments.length; i++) if (sample >= segments[i].start && sample < segments[i].end) return i;
+  return segments.length - 1;
+}
+
+// ============ 播放按钮 / 撤销重做 / 导出 ============
+playBtn.addEventListener('click', play);
+$('undoBtn').addEventListener('click', undo);
+$('redoBtn').addEventListener('click', redo);
+
+$('exportBtn').addEventListener('click', () => {
+  $('exportName').value = 'edited_audio';
+  $('exportFormat').value = 'wav';
+  $('extInputWrap').classList.remove('show');
+  $('wavOptions').style.display = 'block';
+  $('exportSampleRate').value = '44100';
+  $('customSampleRate').style.display = 'none';
+  $('exportChannels').value = String(audioBuffer.numberOfChannels);
+  
+  $('exportTitle').value = '';
+  $('exportArtist').value = '';
+  $('exportAlbum').value = '';
+  $('exportYear').value = '';
+  
+  $('exportModal').classList.add('show');
+});
+
+$('exportFormat').addEventListener('change', (e) => {
+  if (e.target.value === '*') {
+    $('extInputWrap').classList.add('show');
+  } else {
+    $('extInputWrap').classList.remove('show');
+  }
+  
+  if (e.target.value === 'wav') {
+    $('wavOptions').style.display = 'block';
+  } else {
+    $('wavOptions').style.display = 'none';
+  }
+});
+
+$('exportSampleRate').addEventListener('change', (e) => {
+  if (e.target.value === 'custom') {
+    $('customSampleRate').style.display = 'inline-block';
+  } else {
+    $('customSampleRate').style.display = 'none';
+  }
+});
+
+$('editMetaBtn').addEventListener('click', () => {
+  $('metaModal').classList.add('show');
+});
+
+$('metaConfirm').addEventListener('click', () => {
+  $('metaModal').classList.remove('show');
+});
+
+$('exportConfirm').addEventListener('click', () => {
+  if (!audioBuffer) return;
+  
+  const format = $('exportFormat').value;
+  let name = $('exportName').value.trim() || 'edited_audio';
+  
+  if (format !== '*') {
+    name = name.replace(/\.[^/.]+$/, '');
+    name += '.' + format;
+  } else {
+    const ext = $('exportExtInput').value.trim();
+    if (ext) {
+      name = name.replace(/\.[^/.]+$/, '');
+      name += '.' + ext;
+    }
+  }
+
+  if (format === 'wav') {
+    $('exportModal').classList.remove('show');
+    
+    let targetSr = parseInt($('exportSampleRate').value);
+    if ($('exportSampleRate').value === 'custom') {
+      targetSr = parseInt($('customSampleRate').value) || audioBuffer.sampleRate;
+    }
+    const targetCh = parseInt($('exportChannels').value);
+    
+    const title = $('exportTitle').value.trim();
+    const artist = $('exportArtist').value.trim();
+    const album = $('exportAlbum').value.trim();
+    const year = $('exportYear').value.trim();
+    
+    const wav = encodeWAV(audioBuffer, { title, artist, album, year }, targetSr, targetCh);
+    const blob = new Blob([wav], { type: 'audio/wav' });
+    triggerDownload(blob, name);
+    showToast('已导出 WAV 文件');
+  } else {
+    $('exportModal').classList.remove('show');
+    
+    const chCount = audioBuffer.numberOfChannels;
+    const len = audioBuffer.length;
+    const sr = audioBuffer.sampleRate;
+    
+    const interleaved = new Float32Array(len * chCount);
+    for (let c = 0; c < chCount; c++) {
+      const chData = audioBuffer.getChannelData(c);
+      for (let i = 0; i < len; i++) {
+        interleaved[i * chCount + c] = chData[i];
+      }
+    }
+    const rawAb = interleaved.buffer;
+    const uint8 = new Uint8Array(rawAb);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < uint8.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, uint8.subarray(i, i + chunkSize));
+    }
+    const b64 = btoa(binary);
+
+    if (format === 'xml' || format === 'wemx') {
+      let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<Project sampleRate="${sr}" channels="${chCount}" length="${len}">\n`;
+      xml += `  <Segments>\n`;
+      for (const seg of segments) {
+        xml += `    <Segment start="${seg.start}" end="${seg.end}" name="${(seg.name || '').replace(/"/g, '&quot;')}" muted="${seg.muted}" />\n`;
+      }
+      xml += `  </Segments>\n`;
+      xml += `  <AudioData>\n${b64}\n  </AudioData>\n</Project>`;
+      const blob = new Blob([xml], { type: 'text/xml' });
+      triggerDownload(blob, name);
+    } else {
+      let txt = `=== WAVE_EDITOR_PROJECT_V1 ===\n`;
+      txt += `sampleRate=${sr}\n`;
+      txt += `channels=${chCount}\n`;
+      txt += `length=${len}\n`;
+      txt += `=== SEGMENTS ===\n`;
+      for (const seg of segments) {
+        txt += `${seg.start},${seg.end},${seg.name || ''},${seg.muted}\n`;
+      }
+      txt += `=== AUDIO_DATA ===\n`;
+      for (let i = 0; i < b64.length; i += 76) {
+        txt += b64.substring(i, i + 76) + '\n';
+      }
+      const blob = new Blob([txt], { type: 'text/plain' });
+      triggerDownload(blob, name);
+    }
+    showToast('已导出项目文件');
+  }
+});
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function encodeWAV(buffer, meta, targetSr, targetCh) {
+  const origSr = buffer.sampleRate;
+  const origCh = buffer.numberOfChannels;
+  const origLen = buffer.length;
+  
+  const newLen = Math.round(origLen * (targetSr / origSr));
+  const finalChs = [];
+  
+  for (let c = 0; c < targetCh; c++) {
+    finalChs.push(new Float32Array(newLen));
+  }
+
+  const origData = [];
+  for (let c = 0; c < origCh; c++) origData.push(buffer.getChannelData(c));
+
+  for (let i = 0; i < newLen; i++) {
+    const srcPos = i * (origSr / targetSr);
+    const i0 = Math.floor(srcPos);
+    const i1 = Math.min(origLen - 1, i0 + 1);
+    const frac = srcPos - i0;
+
+    const sampleVals = [];
+    for (let c = 0; c < origCh; c++) {
+      sampleVals.push(origData[c][i0] * (1 - frac) + origData[c][i1] * frac);
+    }
+
+    if (targetCh === 1) {
+      let sum = 0;
+      for (let c = 0; c < origCh; c++) sum += sampleVals[c];
+      finalChs[0][i] = sum / origCh;
+    } else if (targetCh === 2) {
+      if (origCh === 1) {
+        finalChs[0][i] = sampleVals[0];
+        finalChs[1][i] = sampleVals[0];
+      } else {
+        finalChs[0][i] = sampleVals[0];
+        finalChs[1][i] = sampleVals[1];
+      }
+    }
+  }
+
+  const blockAlign = targetCh * 2;
+  const dataSize = newLen * blockAlign;
+  
+  let infoChunk = new Uint8Array(0);
+  if (meta.title || meta.artist || meta.album || meta.year) {
+    const te = new TextEncoder();
+    let infoBytes = [];
+    
+    const addInfo = (id, text) => {
+      if (!text) return;
+      const str = text + '\0';
+      const b = te.encode(str);
+      const pad = b.length % 2 === 0 ? 0 : 1;
+      const chunkSize = b.length + pad;
+      const totalSize = 8 + chunkSize;
+      
+      const subChunk = new Uint8Array(totalSize);
+      const view = new DataView(subChunk.buffer);
+      for (let i = 0; i < 4; i++) view.setUint8(i, id.charCodeAt(i));
+      view.setUint32(4, chunkSize, true);
+      subChunk.set(b, 8);
+      return subChunk;
+    };
+
+    const tTitle = addInfo('INAM', meta.title);
+    const tArtist = addInfo('IART', meta.artist);
+    const tAlbum = addInfo('IPRD', meta.album);
+    const tYear = addInfo('ICRD', meta.year);
+    
+    if (tTitle) infoBytes.push(tTitle);
+    if (tArtist) infoBytes.push(tArtist);
+    if (tAlbum) infoBytes.push(tAlbum);
+    if (tYear) infoBytes.push(tYear);
+    
+    const infoSize = infoBytes.reduce((acc, arr) => acc + arr.length, 0);
+    if (infoSize > 0) {
+      infoChunk = new Uint8Array(12 + infoSize);
+      const view = new DataView(infoChunk.buffer);
+      view.setUint8(0, 'L'.charCodeAt(0)); view.setUint8(1, 'I'.charCodeAt(0));
+      view.setUint8(2, 'S'.charCodeAt(0)); view.setUint8(3, 'T'.charCodeAt(0));
+      view.setUint32(4, infoSize + 4, true);
+      view.setUint8(8, 'I'.charCodeAt(0)); view.setUint8(9, 'N'.charCodeAt(0));
+      view.setUint8(10, 'F'.charCodeAt(0)); view.setUint8(11, 'O'.charCodeAt(0));
+      let offset = 12;
+      for (const b of infoBytes) {
+        infoChunk.set(b, offset);
+        offset += b.length;
+      }
+    }
+  }
+
+  const ab = new ArrayBuffer(44 + dataSize + infoChunk.length);
+  const view = new DataView(ab);
+  const ws = (o,s) => { for (let i = 0; i < s.length; i++) view.setUint8(o+i, s.charCodeAt(i)); };
+  
+  ws(0,'RIFF'); view.setUint32(4, 36 + dataSize + infoChunk.length, true); ws(8,'WAVE'); ws(12,'fmt ');
+  view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,targetCh,true);
+  view.setUint32(24,targetSr,true); view.setUint32(28,targetSr*blockAlign,true);
+  view.setUint16(32,blockAlign,true); view.setUint16(34,16,true);
+  ws(36,'data'); view.setUint32(40,dataSize,true);
+  
+  let off = 44;
+  for (let i = 0; i < newLen; i++) {
+    for (let c = 0; c < targetCh; c++) {
+      let s = Math.max(-1, Math.min(1, finalChs[c][i]));
+      s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      view.setInt16(off, s, true); off += 2;
+    }
+  }
+  
+  if (infoChunk.length > 0) {
+    new Uint8Array(ab, 44 + dataSize).set(infoChunk);
+  }
+  
+  return ab;
+}
+
+// ============ 快捷键 ============
+function stepSample() { return Math.max(1, Math.round(getSampleRate() / (PX_PER_SEC_BASE * zoom))); }
+
+window.addEventListener('keydown', (e) => {
+  if (!audioBuffer) return;
+
+  if (e.ctrlKey && e.code === 'KeyL') {
+    e.preventDefault();
+    toggleFocusMode();
+    return;
+  }
+
+  if (isFocusMode) {
+    if (document.activeElement.tagName === 'INPUT') return;
+    
+    if (e.code === 'Space') { e.preventDefault(); play(); }
+    else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      e.preventDefault();
+      const dir = e.code === 'ArrowLeft' ? -1 : 1;
+      
+      if (e.ctrlKey && e.shiftKey) {
+        cursorSample = dir < 0 ? 0 : getTotalSamples();
+        updateCursorPositionAndScroll();
+      } else if (e.ctrlKey) {
+        if (selectedSegment >= 0 && selectedSegment < segments.length) {
+          const seg = segments[selectedSegment];
+          cursorSample = dir < 0 ? seg.start : seg.end;
+        } else {
+          cursorSample = dir < 0 ? 0 : getTotalSamples();
+        }
+        updateCursorPositionAndScroll();
+      } else if (e.shiftKey) {
+        waveContainer.scrollLeft += dir * Math.max(40, waveContainer.clientWidth * 0.1);
+      } else {
+        cursorSample = Math.max(0, Math.min(getTotalSamples(), cursorSample + dir * stepSample()));
+        updateCursorPositionAndScroll();
+      }
+    }
+    return;
+  }
+
+  if (document.activeElement.tagName === 'INPUT') return;
+  const ctrl = e.ctrlKey || e.metaKey;
+
+  if (ctrl && e.code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+  if (ctrl && (e.code === 'KeyY' || (e.code === 'KeyZ' && e.shiftKey))) { e.preventDefault(); redo(); return; }
+  if (e.code === 'Delete') {
+    e.preventDefault();
+    if (selectedSegment >= 0 && selectedSegment < segments.length) {
+      pushHistory();
+      const seg = segments[selectedSegment];
+      deleteRange(seg.start, seg.end);
+      selectedSegment = -1; selection = null;
+      afterEdit('已删除选中段落');
+    }
+    return;
+  }
+  if (e.code === 'Space') { e.preventDefault(); play(); }
+  else if (ctrl && e.code === 'KeyC') { e.preventDefault(); if (!$('copyBtn').disabled) $('copyBtn').click(); }
+  else if (ctrl && e.code === 'KeyX') { e.preventDefault(); if (!$('cutBtn').disabled) $('cutBtn').click(); }
+  else if (ctrl && e.code === 'KeyV') { e.preventDefault(); if (!$('pasteBtn').disabled) $('pasteBtn').click(); }
+  else if (ctrl && e.code === 'KeyA') { e.preventDefault(); selection = { start: 0, end: getTotalSamples() }; selectedSegment = -1; drawCursorAndSelection(); draw(); }
+  else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+    e.preventDefault();
+    const dir = e.code === 'ArrowLeft' ? -1 : 1;
+    
+    if (ctrl && e.shiftKey) {
+      cursorSample = dir < 0 ? 0 : getTotalSamples();
+      updateCursorPositionAndScroll();
+    } else if (ctrl) {
+      if (selectedSegment >= 0 && selectedSegment < segments.length) {
+        const seg = segments[selectedSegment];
+        cursorSample = dir < 0 ? seg.start : seg.end;
+      } else {
+        cursorSample = dir < 0 ? 0 : getTotalSamples();
+      }
+      updateCursorPositionAndScroll();
+    } else if (e.shiftKey) {
+      waveContainer.scrollLeft += dir * Math.max(40, waveContainer.clientWidth * 0.1);
+    } else {
+      cursorSample = Math.max(0, Math.min(getTotalSamples(), cursorSample + dir * stepSample()));
+      updateCursorPositionAndScroll();
+    }
+  } else if (e.code === 'Minus' || e.code === 'Equal') {
+    e.preventDefault();
+    const dir = e.code === 'Equal' ? 1 : -1;
+    const r = waveContainer.getBoundingClientRect();
+    setZoom(zoom * (dir > 0 ? 1.5 : 1/1.5), r.left + waveContainer.clientWidth / 2);
+  }
+});
+
+function updateCursorPositionAndScroll() {
+  drawCursorAndSelection();
+  const x = sampleToPx(cursorSample), vl = waveContainer.scrollLeft, vr = vl + waveContainer.clientWidth;
+  if (x < vl) waveContainer.scrollLeft = x - 20;
+  else if (x > vr - 20) waveContainer.scrollLeft = x - waveContainer.clientWidth + 40;
+}
+
+window.addEventListener('resize', () => { if (audioBuffer) { resizeCanvas(); draw(); } });
+
+updateEditButtons();
+updateUndoRedoButtons();
+</script>
+</body>
+</html>
